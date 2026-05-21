@@ -1,0 +1,20 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Node / npm
+node_modules/
+package-lock.json
+
+# Extension build output
+extension/dist/
+extension/out/
+extension/node_modules/
+extension/src/wasm/
+
+# wasm-pack output (generated, not source)
+core/pkg/
+
+# OS
+.DS_Store
+Thumbs.db
