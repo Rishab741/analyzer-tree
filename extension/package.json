@@ -13,6 +13,7 @@
     "views": {
       "explorer": [
         {
+          "type": "webview",
           "id": "analyzerTree",
           "name": "Context Tree",
           "icon": "$(type-hierarchy)",

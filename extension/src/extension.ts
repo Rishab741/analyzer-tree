@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { AnalyzerTreeProvider } from './treeProvider';
+import { ContextTreeWebviewProvider } from './contextTreeWebview';
 import { GitWatcher, getRecentCommits, headHash, parentHashes, countCommits, RawCommit } from './gitWatcher';
 import { detectAgent, RawCommit as DetectorCommit } from './agentDetector';
 import { CommitMeta, KnownAgent } from './types';
@@ -15,7 +15,10 @@ let activeNodeUuid: string | null = null;
 let extensionCtx: vscode.ExtensionContext;
 let isBatchImporting = false;
 
-const provider = new AnalyzerTreeProvider();
+const provider = new ContextTreeWebviewProvider(
+    (uuids) => cmdSaveSelectedContext(uuids),
+    (uuid)  => cmdSelectNode(uuid),
+);
 const gitWatcher = new GitWatcher();
 let statusBar: vscode.StatusBarItem;
 
@@ -29,10 +32,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusBar.tooltip = 'Analyzer Tree — click for token stats';
     statusBar.show();
 
-    const treeView = vscode.window.createTreeView('analyzerTree', {
-        treeDataProvider: provider,
-        showCollapseAll: true,
-    });
+    const webviewReg = vscode.window.registerWebviewViewProvider(
+        ContextTreeWebviewProvider.viewType,
+        provider,
+        { webviewOptions: { retainContextWhenHidden: true } },
+    );
 
     // Register commands FIRST — so they always exist regardless of WASM state
     const cmds: [string, (...args: unknown[]) => unknown][] = [
@@ -49,7 +53,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         context.subscriptions.push(vscode.commands.registerCommand(id, fn));
     }
 
-    context.subscriptions.push(treeView, statusBar, { dispose: () => gitWatcher.stop() });
+    context.subscriptions.push(webviewReg, statusBar, { dispose: () => gitWatcher.stop() });
 
     // Load WASM engine — commands remain registered even if this fails
     try {
@@ -318,8 +322,8 @@ async function cmdAddDecision(): Promise<void> {
 }
 
 function cmdSelectNode(...args: unknown[]): void {
-    const uuid = args[0] as string;
-    if (!bridge || !uuid) { return; }
+    const uuid = (args[0] as string) || (args as unknown as string);
+    if (!bridge || !uuid || typeof uuid !== 'string') { return; }
     bridge.set_active_leaf(uuid);
     activeNodeUuid = uuid;
     updateStatusBar();
@@ -328,7 +332,7 @@ function cmdSelectNode(...args: unknown[]): void {
 
 async function cmdPruneNode(): Promise<void> {
     if (!bridge) { return; }
-    const target = provider.activeLeafUuid ?? activeNodeUuid;
+    const target = activeNodeUuid;
     if (!target) { return; }
     const summary = await vscode.window.showInputBox({
         prompt: 'Short summary to replace this node (reclaims tokens)',
@@ -386,10 +390,32 @@ async function cmdSaveContext(): Promise<void> {
     vscode.window.showInformationMessage('Context saved to .analyzer-tree/context.json');
 }
 
+/** Called when the user clicks "Save Context" inside the webview after selecting nodes. */
+async function cmdSaveSelectedContext(selectedUuids: string[]): Promise<void> {
+    if (!bridge) { return; }
+    const tree = JSON.parse(bridge.get_tree_structure());
+    const kept = new Set(selectedUuids);
+    // Build a compact context: only selected nodes' content fields
+    const context = tree.nodes
+        .filter((sn: { node: { uuid: string } }) => kept.has(sn.node.uuid))
+        .map((sn: { node: { label: string; content: string; node_type: string; metadata: string } }) => ({
+            label:    sn.node.label,
+            type:     sn.node.node_type,
+            content:  sn.node.content,
+            metadata: sn.node.metadata ? JSON.parse(sn.node.metadata) : null,
+        }));
+    const json = JSON.stringify({ selected_nodes: context, generated_at: new Date().toISOString() }, null, 2);
+    await writeContextFile(json);
+    vscode.window.showInformationMessage(
+        `Context saved — ${selectedUuids.length} nodes written to .analyzer-tree/context.json`
+    );
+}
+
 function refreshAll(): void {
     if (!bridge) { return; }
     provider.refresh(bridge.get_tree_structure());
     updateStatusBar();
+
     if (!isBatchImporting && bridge.needs_pruning()) {
         vscode.window
             .showWarningMessage(
