@@ -23,4 +23,9 @@ module.exports = {
   externals: {
     vscode: 'commonjs vscode', // Do not bundle VS Code core modules
   },
+  // Preserve real __dirname so the WASM readFileSync resolves to dist/
+  node: {
+    __dirname: false,
+    __filename: false,
+  },
 };

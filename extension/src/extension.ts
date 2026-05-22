@@ -24,13 +24,6 @@ let statusBar: vscode.StatusBarItem;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     extensionCtx = context;
 
-    try {
-        wasm = require('./wasm/analyzer_core') as WasmModule;
-    } catch (err) {
-        vscode.window.showErrorMessage(`Analyzer Tree: failed to load Rust engine — ${err}`);
-        return;
-    }
-
     statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBar.command = 'analyzer-tree.showStats';
     statusBar.tooltip = 'Analyzer Tree — click for token stats';
@@ -41,20 +34,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         showCollapseAll: true,
     });
 
-    // Restore persisted tree
-    const saved = context.workspaceState.get<string>('analyzerTree.snapshot');
-    if (saved) {
-        bridge = new wasm.AnalyzerBridge();
-        if (bridge.import_tree(saved)) {
-            const ctx = JSON.parse(bridge.get_active_context()) as Array<{ uuid: string }>;
-            activeNodeUuid = ctx.at(-1)?.uuid ?? null;
-            refreshAll();
-        } else {
-            bridge = null;
-        }
-    }
-
-    // Commands
+    // Register commands FIRST — so they always exist regardless of WASM state
     const cmds: [string, (...args: unknown[]) => unknown][] = [
         ['analyzer-tree.initialize',   cmdInitialize],
         ['analyzer-tree.scanHistory',  cmdScanHistory],
@@ -69,8 +49,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         context.subscriptions.push(vscode.commands.registerCommand(id, fn));
     }
 
-    startGitWatcher();
     context.subscriptions.push(treeView, statusBar, { dispose: () => gitWatcher.stop() });
+
+    // Load WASM engine — commands remain registered even if this fails
+    try {
+        wasm = require('./wasm/analyzer_core') as WasmModule;
+    } catch (err) {
+        vscode.window.showErrorMessage(
+            `Analyzer Tree: WASM engine failed to load — ${err}\n\nTry reinstalling the extension.`
+        );
+        return;
+    }
+
+    // Restore persisted tree
+    const saved = context.workspaceState.get<string>('analyzerTree.snapshot');
+    if (saved) {
+        bridge = new wasm.AnalyzerBridge();
+        if (bridge.import_tree(saved)) {
+            const ctx = JSON.parse(bridge.get_active_context()) as Array<{ uuid: string }>;
+            activeNodeUuid = ctx.at(-1)?.uuid ?? null;
+            refreshAll();
+        } else {
+            bridge = null;
+        }
+    }
+
+    startGitWatcher();
 }
 
 export function deactivate(): void { gitWatcher.stop(); }
@@ -194,7 +198,10 @@ function agentDisplay(a: KnownAgent): string { return AGENT_DISPLAYS[a] ?? a; }
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 async function cmdInitialize(): Promise<void> {
-    if (!wasm) { return; }
+    if (!wasm) {
+        vscode.window.showErrorMessage('Analyzer Tree: WASM engine not loaded. Reinstall the extension and reload VS Code.');
+        return;
+    }
 
     const root = repoPath();
 
