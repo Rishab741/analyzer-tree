@@ -165,18 +165,28 @@ function parseNumstat(raw: string): Map<string, FileStat> {
 /** Parse metadata output and join with numstat. */
 function parseMeta(raw: string, statMap: Map<string, FileStat>): RawCommit[] {
     const commits: RawCommit[] = [];
-    // Split on the marker line; first element is empty
-    const blocks = raw.split(new RegExp(`^${HASH_MARKER}`, 'm')).filter(b => b.trim());
+    const lines = raw.split('\n');
+    let i = 0;
 
-    for (const block of blocks) {
-        const lines = block.split('\n');
-        const hash      = lines[0]?.trim() ?? '';
-        const shortHash = lines[1]?.trim() ?? '';
-        const authorName  = lines[2]?.trim() ?? '';
-        const authorEmail = lines[3]?.trim() ?? '';
-        const tsRaw = lines[4]?.trim() ?? '0';
-        const subject = lines[5]?.trim() ?? '';
-        const body    = lines.slice(6).join('\n').trim();
+    while (i < lines.length) {
+        if (!lines[i].startsWith(HASH_MARKER)) { i++; continue; }
+
+        const hash        = lines[i].slice(HASH_MARKER.length).trim();
+        const shortHash   = lines[i + 1]?.trim() ?? '';
+        const authorName  = lines[i + 2]?.trim() ?? '';
+        const authorEmail = lines[i + 3]?.trim() ?? '';
+        const tsRaw       = lines[i + 4]?.trim() ?? '0';
+        const subject     = lines[i + 5]?.trim() ?? '';
+
+        // Body = everything between subject and next marker
+        let j = i + 6;
+        const bodyLines: string[] = [];
+        while (j < lines.length && !lines[j].startsWith(HASH_MARKER)) {
+            bodyLines.push(lines[j]);
+            j++;
+        }
+        const body = bodyLines.join('\n').trim();
+        i = j;
 
         if (!hash) { continue; }
 
@@ -189,7 +199,7 @@ function parseMeta(raw: string, statMap: Map<string, FileStat>): RawCommit[] {
             subject,
             body,
             timestamp: parseInt(tsRaw, 10) * 1000,
-            branch: '',          // filled in lazily by callers that need it
+            branch: '',
             filesChanged: stat.files,
             insertions: stat.insertions,
             deletions: stat.deletions,
