@@ -52,9 +52,16 @@ export class ContextTreeWebviewProvider implements vscode.WebviewViewProvider {
             if (msg.type === 'selectNode')  { this.onSelectNode(msg.uuid); }
         });
 
+        // Re-send latest state whenever the view becomes visible (e.g. user opens sidebar)
+        webviewView.onDidChangeVisibility(() => {
+            if (webviewView.visible && this._pending) {
+                webviewView.webview.postMessage(this._pending);
+            }
+        });
+
+        // Send any state that arrived before the view was resolved
         if (this._pending) {
             webviewView.webview.postMessage(this._pending);
-            this._pending = null;
         }
     }
 
@@ -76,10 +83,12 @@ export class ContextTreeWebviewProvider implements vscode.WebviewViewProvider {
 
         const payload = { type: 'update', nodes, projectName, totalTokens, budget, activeLeafUuid };
 
-        if (this._view?.visible) {
+        // Always store the latest state so onDidChangeVisibility can re-send it
+        this._pending = payload;
+
+        // Send immediately regardless of visible state — VS Code queues it safely
+        if (this._view) {
             this._view.webview.postMessage(payload);
-        } else {
-            this._pending = payload;
         }
     }
 }
