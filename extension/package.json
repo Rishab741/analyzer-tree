@@ -1,22 +1,85 @@
 {
   "name": "analyzer-tree-extension",
   "displayName": "AI Context Analyzer Tree",
-  "version": "0.0.1",
+  "description": "Records every AI decision and file change as a token-efficient decision tree.",
+  "version": "0.1.0",
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": [
-    "Other"
-  ],
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
   "main": "./dist/extension.js",
-  "activationEvents": [],
   "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "analyzerTree",
+          "name": "Context Tree",
+          "icon": "$(type-hierarchy)",
+          "contextualTitle": "Analyzer Tree"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "analyzer-tree.initialize",
-        "title": "Analyzer Tree: Initialize Context"
+        "title": "Analyzer Tree: Initialize",
+        "icon": "$(add)"
+      },
+      {
+        "command": "analyzer-tree.addDecision",
+        "title": "Analyzer Tree: Add Decision Node",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "analyzer-tree.pruneNode",
+        "title": "Analyzer Tree: Prune Active Node",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "analyzer-tree.exportTree",
+        "title": "Analyzer Tree: Export Tree JSON",
+        "icon": "$(export)"
+      },
+      {
+        "command": "analyzer-tree.showStats",
+        "title": "Analyzer Tree: Show Token Stats"
+      },
+      {
+        "command": "analyzer-tree.scanHistory",
+        "title": "Analyzer Tree: Scan Git History for AI Commits",
+        "icon": "$(history)"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "analyzer-tree.initialize",
+          "when": "view == analyzerTree",
+          "group": "navigation"
+        },
+        {
+          "command": "analyzer-tree.addDecision",
+          "when": "view == analyzerTree",
+          "group": "navigation"
+        },
+        {
+          "command": "analyzer-tree.pruneNode",
+          "when": "view == analyzerTree",
+          "group": "navigation"
+        },
+        {
+          "command": "analyzer-tree.exportTree",
+          "when": "view == analyzerTree",
+          "group": "navigation"
+        },
+        {
+          "command": "analyzer-tree.scanHistory",
+          "when": "view == analyzerTree",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "webpack --mode production",
