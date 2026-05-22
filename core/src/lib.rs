@@ -228,7 +228,7 @@ impl AnalyzerBridge {
             t.add_primary(
                 parent_uuid,
                 label.to_string(),
-                NodeType::AgentCommit,
+                NodeType::Commit,
                 content.to_string(),
                 meta,
                 now(),
@@ -237,7 +237,7 @@ impl AnalyzerBridge {
             t.add_alternative(
                 parent_uuid,
                 label.to_string(),
-                NodeType::AgentCommit,
+                NodeType::Commit,
                 content.to_string(),
                 meta,
                 now(),

@@ -1,8 +1,8 @@
 export type NodeType =
     | 'root'
+    | 'commit'           // any git commit (human or AI)
     | 'user_prompt'
     | 'agent_decision'
-    | 'agent_commit'
     | 'file_change'
     | 'tool_call'
     | 'tool_result'
@@ -16,7 +16,7 @@ export interface DecisionNode {
     node_type: NodeType;
     content: string;
     summary: string | null;
-    metadata: string | null;  // JSON-encoded CommitMeta for agent_commit nodes
+    metadata: string | null;   // JSON-encoded CommitMeta
     token_count: number;
     timestamp: number;
     depth: number;
@@ -40,28 +40,23 @@ export interface SerializableTree {
     counter: number;
 }
 
-// ── Agent commit metadata ──────────────────────────────────────────────────────
+// ── Commit metadata (stored in node.metadata as JSON) ─────────────────────────
 
 export type KnownAgent =
-    | 'claude'
-    | 'gemini'
-    | 'copilot'
-    | 'codex'
-    | 'cursor'
-    | 'aider'
-    | 'devin'
-    | 'coderabbit'
-    | 'unknown_ai';
+    | 'claude' | 'gemini' | 'copilot' | 'codex'
+    | 'cursor' | 'aider'  | 'devin'   | 'coderabbit';
 
 export interface CommitMeta {
     commit_hash: string;
     short_hash: string;
-    agent: KnownAgent;
-    agent_display: string;
+    /** null = human author */
+    agent: KnownAgent | null;
+    agent_display: string | null;
     branch: string;
     author_name: string;
     author_email: string;
     message: string;
+    body: string;
     files_changed: string[];
     insertions: number;
     deletions: number;
@@ -69,25 +64,26 @@ export interface CommitMeta {
     timestamp: number;
 }
 
+// ── Icons ──────────────────────────────────────────────────────────────────────
+
 export const AGENT_ICONS: Record<KnownAgent, string> = {
-    claude: '🤖',
-    gemini: '✨',
-    copilot: '🐙',
-    codex: '🧠',
-    cursor: '🖱',
-    aider: '🛠',
-    devin: '🦾',
+    claude:     '🤖',
+    gemini:     '✨',
+    copilot:    '🐙',
+    codex:      '🧠',
+    cursor:     '🖱',
+    aider:      '🛠',
+    devin:      '🦾',
     coderabbit: '🐇',
-    unknown_ai: '🤖',
 };
 
 export const NODE_ICONS: Record<NodeType, string> = {
-    root: '🌳',
-    user_prompt: '💬',
-    agent_decision: '🤖',
-    agent_commit: '📦',
-    file_change: '📄',
-    tool_call: '⚙',
-    tool_result: '↩',
+    root:              '🌳',
+    commit:            '📦',
+    user_prompt:       '💬',
+    agent_decision:    '🤖',
+    file_change:       '📄',
+    tool_call:         '⚙',
+    tool_result:       '↩',
     pruned_checkpoint: '✂',
 };

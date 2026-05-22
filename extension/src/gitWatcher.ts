@@ -1,99 +1,62 @@
 import * as vscode from 'vscode';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { RawCommit } from './agentDetector';
 
 const exec = promisify(execFile);
 
-// ── Git log parsing ────────────────────────────────────────────────────────────
+// ── Public commit shape ────────────────────────────────────────────────────────
 
-const SEP = '----COMMIT_SEP----';
+export interface RawCommit {
+    hash: string;
+    shortHash: string;
+    authorName: string;
+    authorEmail: string;
+    subject: string;
+    body: string;
+    timestamp: number;         // ms since epoch
+    branch: string;
+    filesChanged: string[];
+    insertions: number;
+    deletions: number;
+}
 
-/** Fetch the N most recent commits on all local branches. */
-export async function getRecentCommits(
-    repoRoot: string,
-    n = 50,
-): Promise<RawCommit[]> {
-    try {
-        // %H = full hash, %h = short, %an = author name, %ae = author email,
-        // %at = unix timestamp, %s = subject, %b = body
-        const { stdout: logOut } = await exec(
-            'git',
-            ['log', `--max-count=${n}`, '--all', '--format=%H%n%h%n%an%n%ae%n%at%n%s%n%b%n' + SEP],
-            { cwd: repoRoot },
-        );
+// ── Git queries ────────────────────────────────────────────────────────────────
 
-        // Get numstat for the same commits (insertions/deletions + files)
-        const { stdout: statOut } = await exec(
-            'git',
-            ['log', `--max-count=${n}`, '--all', '--numstat', '--format=' + SEP],
-            { cwd: repoRoot },
-        );
-
-        return parseLogOutput(logOut, statOut, repoRoot);
-    } catch {
-        return [];
-    }
+/** Fetch the N most recent commits across all local branches. */
+export async function getRecentCommits(repoRoot: string, n = 100): Promise<RawCommit[]> {
+    return runLog(repoRoot, [`--max-count=${n}`, '--all']);
 }
 
 /** Fetch only commits that appeared after `sinceHash` on the current branch. */
-export async function getCommitsSince(
-    repoRoot: string,
-    sinceHash: string,
-): Promise<RawCommit[]> {
-    try {
-        const { stdout: logOut } = await exec(
-            'git',
-            ['log', `${sinceHash}..HEAD`, '--format=%H%n%h%n%an%n%ae%n%at%n%s%n%b%n' + SEP],
-            { cwd: repoRoot },
-        );
-        const { stdout: statOut } = await exec(
-            'git',
-            ['log', `${sinceHash}..HEAD`, '--numstat', '--format=' + SEP],
-            { cwd: repoRoot },
-        );
-        return parseLogOutput(logOut, statOut, repoRoot);
-    } catch {
-        return [];
-    }
+export async function getCommitsSince(repoRoot: string, sinceHash: string): Promise<RawCommit[]> {
+    return runLog(repoRoot, [`${sinceHash}..HEAD`]);
 }
 
-/** Get the current HEAD hash. */
+/** Current HEAD hash. */
 export async function headHash(repoRoot: string): Promise<string> {
     try {
         const { stdout } = await exec('git', ['rev-parse', 'HEAD'], { cwd: repoRoot });
         return stdout.trim();
-    } catch {
-        return '';
-    }
+    } catch { return ''; }
 }
 
-/** Get the parent hash(es) of a commit. Returns empty array for the initial commit. */
+/** Direct parent hashes of a commit (>1 means a merge commit). */
 export async function parentHashes(repoRoot: string, hash: string): Promise<string[]> {
     try {
-        const { stdout } = await exec(
-            'git',
-            ['log', '--format=%P', '-1', hash],
-            { cwd: repoRoot },
-        );
+        const { stdout } = await exec('git', ['log', '--format=%P', '-1', hash], { cwd: repoRoot });
         return stdout.trim().split(/\s+/).filter(Boolean);
-    } catch {
-        return [];
-    }
+    } catch { return []; }
 }
 
-/** Determine which branch a commit belongs to (best effort). */
+/** Best-effort branch name for a commit. */
 export async function branchForCommit(repoRoot: string, hash: string): Promise<string> {
     try {
         const { stdout } = await exec(
-            'git',
-            ['branch', '--contains', hash, '--format=%(refname:short)'],
+            'git', ['branch', '--contains', hash, '--format=%(refname:short)'],
             { cwd: repoRoot },
         );
-        return stdout.trim().split('\n')[0] ?? 'unknown';
-    } catch {
-        return 'unknown';
-    }
+        return stdout.trim().split('\n')[0]?.trim() || 'unknown';
+    } catch { return 'unknown'; }
 }
 
 // ── Watcher ────────────────────────────────────────────────────────────────────
@@ -102,52 +65,35 @@ export class GitWatcher {
     private disposables: vscode.Disposable[] = [];
     private lastHead = '';
 
-    /**
-     * Start watching a repo. Fires `onCommit` for every new commit that arrives
-     * (local or fetched from remote) that was NOT previously seen.
-     */
-    start(
-        repoRoot: string,
-        onCommit: (commits: RawCommit[]) => void,
-    ): void {
+    start(repoRoot: string, onCommit: (commits: RawCommit[]) => void): void {
         this.stop();
-
-        // Seed the last-known HEAD so we don't replay history on startup
         headHash(repoRoot).then(h => { this.lastHead = h; });
 
         const trigger = async () => {
             const current = await headHash(repoRoot);
             if (!current || current === this.lastHead) { return; }
-
             const commits = this.lastHead
                 ? await getCommitsSince(repoRoot, this.lastHead)
                 : await getRecentCommits(repoRoot, 1);
-
             this.lastHead = current;
             if (commits.length > 0) { onCommit(commits); }
         };
 
-        // Local commits: COMMIT_EDITMSG is rewritten after every `git commit`
-        const localWatcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(repoRoot, '.git/COMMIT_EDITMSG'),
-        );
-        localWatcher.onDidChange(trigger);
-        localWatcher.onDidCreate(trigger);
+        const local = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(repoRoot, '.git/COMMIT_EDITMSG'));
+        local.onDidChange(trigger);
+        local.onDidCreate(trigger);
 
-        // Fetched commits: FETCH_HEAD is updated after every `git fetch/pull`
-        const fetchWatcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(repoRoot, '.git/FETCH_HEAD'),
-        );
-        fetchWatcher.onDidChange(trigger);
+        const fetched = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(repoRoot, '.git/FETCH_HEAD'));
+        fetched.onDidChange(trigger);
 
-        // Branch ref changes (push --force, rebase, etc.)
-        const refWatcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(repoRoot, '.git/refs/heads/**'),
-        );
-        refWatcher.onDidChange(trigger);
-        refWatcher.onDidCreate(trigger);
+        const refs = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(repoRoot, '.git/refs/heads/**'));
+        refs.onDidChange(trigger);
+        refs.onDidCreate(trigger);
 
-        this.disposables.push(localWatcher, fetchWatcher, refWatcher);
+        this.disposables.push(local, fetched, refs);
     }
 
     stop(): void {
@@ -156,70 +102,90 @@ export class GitWatcher {
     }
 }
 
-// ── Parsing internals ──────────────────────────────────────────────────────────
+// ── Parsing ────────────────────────────────────────────────────────────────────
 
-function parseLogOutput(logOut: string, statOut: string, _repoRoot: string): RawCommit[] {
-    const stats = parseNumstat(statOut);
-    const blocks = logOut.split(SEP).map(b => b.trim()).filter(Boolean);
-    const result: RawCommit[] = [];
+// Use ^^HASH as a per-commit marker so we can correlate numstat with metadata.
+const HASH_MARKER = '^^';
+
+async function runLog(repoRoot: string, extraArgs: string[]): Promise<RawCommit[]> {
+    try {
+        // Two passes: metadata and numstat, both keyed by full hash.
+        const metaArgs = ['log', ...extraArgs,
+            '--format=' + HASH_MARKER + '%H%n%h%n%an%n%ae%n%at%n%s%n%b%n'];
+        const statArgs = ['log', ...extraArgs,
+            '--format=' + HASH_MARKER + '%H', '--numstat'];
+
+        const [{ stdout: metaOut }, { stdout: statOut }] = await Promise.all([
+            exec('git', metaArgs, { cwd: repoRoot }),
+            exec('git', statArgs, { cwd: repoRoot }),
+        ]);
+
+        const statMap = parseNumstat(statOut);
+        return parseMeta(metaOut, statMap);
+    } catch { return []; }
+}
+
+interface FileStat { files: string[]; insertions: number; deletions: number; }
+
+/** Parse numstat output keyed by full commit hash. */
+function parseNumstat(raw: string): Map<string, FileStat> {
+    const map = new Map<string, FileStat>();
+    let current: FileStat | null = null;
+    let currentHash = '';
+
+    for (const line of raw.split('\n')) {
+        if (line.startsWith(HASH_MARKER)) {
+            currentHash = line.slice(HASH_MARKER.length).trim();
+            current = { files: [], insertions: 0, deletions: 0 };
+            map.set(currentHash, current);
+            continue;
+        }
+        if (!current || !line.trim()) { continue; }
+        const parts = line.split('\t');
+        if (parts.length === 3) {
+            const ins = parseInt(parts[0] ?? '0', 10);
+            const del = parseInt(parts[1] ?? '0', 10);
+            const file = parts[2]?.trim() ?? '';
+            if (!isNaN(ins)) { current.insertions += ins; }
+            if (!isNaN(del)) { current.deletions += del; }
+            if (file) { current.files.push(file); }
+        }
+    }
+    return map;
+}
+
+/** Parse metadata output and join with numstat. */
+function parseMeta(raw: string, statMap: Map<string, FileStat>): RawCommit[] {
+    const commits: RawCommit[] = [];
+    // Split on the marker line; first element is empty
+    const blocks = raw.split(new RegExp(`^${HASH_MARKER}`, 'm')).filter(b => b.trim());
 
     for (const block of blocks) {
         const lines = block.split('\n');
-        if (lines.length < 5) { continue; }
-
-        const hash = lines[0]?.trim() ?? '';
+        const hash      = lines[0]?.trim() ?? '';
         const shortHash = lines[1]?.trim() ?? '';
-        const authorName = lines[2]?.trim() ?? '';
+        const authorName  = lines[2]?.trim() ?? '';
         const authorEmail = lines[3]?.trim() ?? '';
-        const timestamp = parseInt(lines[4]?.trim() ?? '0', 10) * 1000;
+        const tsRaw = lines[4]?.trim() ?? '0';
         const subject = lines[5]?.trim() ?? '';
-        const body = lines.slice(6).join('\n').trim();
+        const body    = lines.slice(6).join('\n').trim();
 
-        const stat = stats[hash] ?? { files: [], insertions: 0, deletions: 0 };
+        if (!hash) { continue; }
 
-        result.push({
+        const stat = statMap.get(hash) ?? { files: [], insertions: 0, deletions: 0 };
+        commits.push({
             hash,
             shortHash,
             authorName,
             authorEmail,
             subject,
             body,
-            timestamp,
-            branch: '',  // filled in by caller when needed
+            timestamp: parseInt(tsRaw, 10) * 1000,
+            branch: '',          // filled in lazily by callers that need it
             filesChanged: stat.files,
             insertions: stat.insertions,
             deletions: stat.deletions,
         });
     }
-
-    return result;
-}
-
-interface NumstatEntry {
-    files: string[];
-    insertions: number;
-    deletions: number;
-}
-
-function parseNumstat(statOut: string): Record<string, NumstatEntry> {
-    // statOut alternates: SEP (for commit header) then lines of "ins\tdel\tfile"
-    const result: Record<string, NumstatEntry> = {};
-    // Since we used --format=SEP before numstat, the hash isn't in statOut.
-    // We correlate by index to the log blocks — simpler to just aggregate all.
-    // Return a single key '' for aggregation; the caller can distribute if needed.
-    // For the purposes of the tree this level of granularity is sufficient.
-    const entry: NumstatEntry = { files: [], insertions: 0, deletions: 0 };
-    for (const line of statOut.split('\n')) {
-        const parts = line.split('\t');
-        if (parts.length === 3 && parts[0] !== SEP) {
-            const ins = parseInt(parts[0] ?? '0', 10);
-            const del = parseInt(parts[1] ?? '0', 10);
-            const file = parts[2]?.trim() ?? '';
-            if (!isNaN(ins)) { entry.insertions += ins; }
-            if (!isNaN(del)) { entry.deletions += del; }
-            if (file) { entry.files.push(file); }
-        }
-    }
-    result[''] = entry;
-    return result;
+    return commits;
 }

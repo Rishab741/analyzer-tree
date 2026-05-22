@@ -123,6 +123,7 @@ export function buildCommitMeta(commit: RawCommit, agent: KnownAgent): CommitMet
         author_name: commit.authorName,
         author_email: commit.authorEmail,
         message: commit.subject,
+        body: commit.body,
         files_changed: commit.filesChanged,
         insertions: commit.insertions,
         deletions: commit.deletions,

@@ -47,7 +47,7 @@ export class AnalyzerTreeProvider implements vscode.TreeDataProvider<string> {
                 ? '→ '
                 : '';
 
-        const nodeIcon = node.node_type === 'agent_commit'
+        const nodeIcon = node.node_type === 'commit'
             ? agentIcon(node)
             : NODE_ICONS[node.node_type];
 
@@ -92,14 +92,14 @@ function agentIcon(node: DecisionNode): string {
     if (!node.metadata) { return '📦'; }
     try {
         const meta = JSON.parse(node.metadata) as CommitMeta;
-        return AGENT_ICONS[meta.agent] ?? '🤖';
+        return (meta.agent ? AGENT_ICONS[meta.agent] : null) ?? '👤';
     } catch {
         return '📦';
     }
 }
 
 function buildDescription(node: DecisionNode): string {
-    if (node.node_type === 'agent_commit' && node.metadata) {
+    if (node.node_type === 'commit' && node.metadata) {
         try {
             const meta = JSON.parse(node.metadata) as CommitMeta;
             return `${meta.short_hash}  +${meta.insertions}/-${meta.deletions}  ${node.token_count}tok`;
@@ -112,10 +112,12 @@ function buildTooltip(node: DecisionNode): vscode.MarkdownString {
     const md = new vscode.MarkdownString(undefined, true);
     md.supportHtml = false;
 
-    if (node.node_type === 'agent_commit' && node.metadata) {
+    if (node.node_type === 'commit' && node.metadata) {
         try {
             const meta = JSON.parse(node.metadata) as CommitMeta;
-            md.appendMarkdown(`**${AGENT_ICONS[meta.agent]} ${meta.agent_display}** — \`${meta.short_hash}\`\n\n`);
+            const icon = meta.agent ? (AGENT_ICONS[meta.agent] ?? '🤖') : '👤';
+            const who = meta.agent_display ?? meta.author_name;
+            md.appendMarkdown(`**${icon} ${who}** — \`${meta.short_hash}\`\n\n`);
             md.appendMarkdown(`> ${meta.message}\n\n`);
             md.appendMarkdown(`| | |\n|---|---|\n`);
             md.appendMarkdown(`| Branch | \`${meta.branch}\` |\n`);

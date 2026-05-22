@@ -10,7 +10,7 @@ pub enum NodeType {
     Root,
     UserPrompt,
     AgentDecision,
-    AgentCommit,   // a git commit authored/co-authored by an AI agent
+    Commit,        // any git commit (human or AI)
     FileChange,
     ToolCall,
     ToolResult,

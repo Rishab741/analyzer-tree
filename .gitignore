@@ -15,6 +15,9 @@ extension/src/wasm/
 # wasm-pack output (generated, not source)
 core/pkg/
 
+# Packaged extension binary
+extension/*.vsix
+
 # OS
 .DS_Store
 Thumbs.db
