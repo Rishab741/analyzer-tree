@@ -61,6 +61,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         ['analyzer-tree.pruneNode',    cmdPruneNode],
         ['analyzer-tree.exportTree',   cmdExportTree],
         ['analyzer-tree.showStats',    cmdShowStats],
+        ['analyzer-tree.saveContext',  cmdSaveContext],
     ];
     for (const [id, fn] of cmds) {
         context.subscriptions.push(vscode.commands.registerCommand(id, fn));
@@ -316,8 +317,29 @@ function cmdShowStats(): void {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function persistAndRefresh(): void {
-    if (bridge) { extensionCtx.workspaceState.update('analyzerTree.snapshot', bridge.export_tree()); }
+    if (bridge) {
+        extensionCtx.workspaceState.update('analyzerTree.snapshot', bridge.export_tree());
+        writeContextFile(bridge.export_tree());   // keep .analyzer-tree/context.json fresh
+    }
     refreshAll();
+}
+
+/** Write the tree JSON to disk so agents (Claude, etc.) can read it directly. */
+async function writeContextFile(json: string): Promise<void> {
+    const root = repoPath();
+    if (!root) { return; }
+    try {
+        const dir  = vscode.Uri.joinPath(vscode.Uri.file(root), '.analyzer-tree');
+        const file = vscode.Uri.joinPath(dir, 'context.json');
+        await vscode.workspace.fs.createDirectory(dir);
+        await vscode.workspace.fs.writeFile(file, Buffer.from(json, 'utf8'));
+    } catch { /* non-fatal */ }
+}
+
+async function cmdSaveContext(): Promise<void> {
+    if (!bridge) { vscode.window.showWarningMessage('Initialize the tree first.'); return; }
+    await writeContextFile(bridge.export_tree());
+    vscode.window.showInformationMessage('Context saved to .analyzer-tree/context.json');
 }
 
 function refreshAll(): void {

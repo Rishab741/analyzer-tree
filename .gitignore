@@ -18,6 +18,9 @@ core/pkg/
 # Packaged extension binary
 extension/*.vsix
 
+# Analyzer Tree context file (generated, not source)
+.analyzer-tree/
+
 # OS
 .DS_Store
 Thumbs.db

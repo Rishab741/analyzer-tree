@@ -49,6 +49,11 @@
         "command": "analyzer-tree.scanHistory",
         "title": "Analyzer Tree: Scan Git History for AI Commits",
         "icon": "$(history)"
+      },
+      {
+        "command": "analyzer-tree.saveContext",
+        "title": "Analyzer Tree: Save Context File",
+        "icon": "$(save)"
       }
     ],
     "menus": {
