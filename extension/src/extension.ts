@@ -204,23 +204,21 @@ async function cmdInitialize(): Promise<void> {
     }
 
     const root = repoPath();
-
-    // Auto-detect project name from folder, auto-size budget from commit count
     const autoName = root ? path.basename(root) : 'Project Root';
     const commitCount = root ? await countCommits(root) : 0;
-    // 500 tokens per commit for headroom; floor at 200k (Claude full context)
     const autoBudget = Math.max(200000, commitCount * 500);
 
     const choice = await vscode.window.showInformationMessage(
-        `Initialize Analyzer Tree for "${autoName}"?\n${commitCount} commits detected — budget auto-set to ${autoBudget.toLocaleString()} tokens.`,
+        `Initialize Analyzer Tree for "${autoName}"? (${commitCount} commits detected)`,
         { modal: false },
-        'Initialize',
+        'Initialize + Import History',
         'Customize',
     );
     if (!choice) { return; }
 
     let label = autoName;
     let budget = autoBudget;
+    let nToImport = commitCount;
 
     if (choice === 'Customize') {
         const customLabel = await vscode.window.showInputBox({
@@ -237,6 +235,14 @@ async function cmdInitialize(): Promise<void> {
         });
         if (!budgetStr) { return; }
         budget = Number(budgetStr);
+
+        const nStr = await vscode.window.showInputBox({
+            prompt: 'How many recent commits to import? (0 = skip)',
+            value: String(commitCount),
+            validateInput: v => isNaN(Number(v)) ? 'Must be a number' : null,
+        });
+        if (nStr === undefined) { return; }
+        nToImport = Number(nStr);
     }
 
     bridge = new wasm.AnalyzerBridge();
@@ -248,11 +254,12 @@ async function cmdInitialize(): Promise<void> {
         if (head) { bridge.index_commit(head, rootUuid); }
     }
 
-    vscode.window.showInformationMessage(
-        `Analyzer Tree initialized for "${label}" (budget: ${budget.toLocaleString()} tokens). Use "Scan Git History" to import commits.`
-    );
     persistAndRefresh();
     startGitWatcher();
+
+    if (nToImport > 0 && root) {
+        await runHistoryScan(root, nToImport);
+    }
 }
 
 /**
@@ -267,19 +274,23 @@ async function cmdScanHistory(): Promise<void> {
     const root = repoPath();
     if (!root) { return; }
 
+    const existing = root ? await countCommits(root) : 0;
     const nStr = await vscode.window.showInputBox({
-        prompt: 'How many recent commits to import?',
-        value: '100',
+        prompt: `How many recent commits to import? (repo has ${existing})`,
+        value: String(existing),
         validateInput: v => isNaN(Number(v)) ? 'Must be a number' : null,
     });
-    const n = Number(nStr ?? '100');
+    if (nStr === undefined) { return; }
+    await runHistoryScan(root, Number(nStr));
+}
 
+async function runHistoryScan(root: string, n: number): Promise<void> {
     await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Importing git history…', cancellable: false },
         async progress => {
-            progress.report({ message: `Fetching last ${n} commits…` });
+            progress.report({ message: `Fetching ${n} commits…` });
             const commits = (await getRecentCommits(root, n)).reverse();
-            progress.report({ message: `Inserting ${commits.length} commits into tree…` });
+            progress.report({ message: `Building tree from ${commits.length} commits…` });
             isBatchImporting = true;
             await onNewCommits(commits);
             isBatchImporting = false;
@@ -287,7 +298,7 @@ async function cmdScanHistory(): Promise<void> {
             const total = bridge?.get_total_tokens() ?? 0;
             const budgetVal = bridge?.get_token_budget() ?? 0;
             vscode.window.showInformationMessage(
-                `Imported ${commits.length} commits (${aiCount} from AI agents) — ${total.toLocaleString()}/${budgetVal.toLocaleString()} tokens used.`
+                `Imported ${commits.length} commits (${aiCount} AI) — ${total.toLocaleString()}/${budgetVal.toLocaleString()} tokens.`
             );
         }
     );
