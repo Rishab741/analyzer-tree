@@ -48,6 +48,14 @@ export async function parentHashes(repoRoot: string, hash: string): Promise<stri
     } catch { return []; }
 }
 
+/** Total number of commits reachable from HEAD. */
+export async function countCommits(repoRoot: string): Promise<number> {
+    try {
+        const { stdout } = await exec('git', ['rev-list', '--count', 'HEAD'], { cwd: repoRoot });
+        return parseInt(stdout.trim(), 10) || 0;
+    } catch { return 0; }
+}
+
 /** Best-effort branch name for a commit. */
 export async function branchForCommit(repoRoot: string, hash: string): Promise<string> {
     try {

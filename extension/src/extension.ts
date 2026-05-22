@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { AnalyzerTreeProvider } from './treeProvider';
-import { GitWatcher, getRecentCommits, headHash, parentHashes, RawCommit } from './gitWatcher';
+import { GitWatcher, getRecentCommits, headHash, parentHashes, countCommits, RawCommit } from './gitWatcher';
 import { detectAgent, RawCommit as DetectorCommit } from './agentDetector';
 import { CommitMeta, KnownAgent } from './types';
 
@@ -12,6 +13,7 @@ let wasm: WasmModule | null = null;
 let bridge: InstanceType<WasmModule['AnalyzerBridge']> | null = null;
 let activeNodeUuid: string | null = null;
 let extensionCtx: vscode.ExtensionContext;
+let isBatchImporting = false;
 
 const provider = new AnalyzerTreeProvider();
 const gitWatcher = new GitWatcher();
@@ -194,32 +196,53 @@ function agentDisplay(a: KnownAgent): string { return AGENT_DISPLAYS[a] ?? a; }
 async function cmdInitialize(): Promise<void> {
     if (!wasm) { return; }
 
-    const label = await vscode.window.showInputBox({
-        prompt: 'Project / repository name',
-        value: 'Project Root',
-    });
-    if (!label) { return; }
+    const root = repoPath();
 
-    const budgetStr = await vscode.window.showInputBox({
-        prompt: 'Token budget per context window (default 8000)',
-        value: '8000',
-        validateInput: v => isNaN(Number(v)) ? 'Must be a number' : null,
-    });
-    const budget = Number(budgetStr ?? '8000');
+    // Auto-detect project name from folder, auto-size budget from commit count
+    const autoName = root ? path.basename(root) : 'Project Root';
+    const commitCount = root ? await countCommits(root) : 0;
+    // 500 tokens per commit for headroom; floor at 200k (Claude full context)
+    const autoBudget = Math.max(200000, commitCount * 500);
+
+    const choice = await vscode.window.showInformationMessage(
+        `Initialize Analyzer Tree for "${autoName}"?\n${commitCount} commits detected — budget auto-set to ${autoBudget.toLocaleString()} tokens.`,
+        { modal: false },
+        'Initialize',
+        'Customize',
+    );
+    if (!choice) { return; }
+
+    let label = autoName;
+    let budget = autoBudget;
+
+    if (choice === 'Customize') {
+        const customLabel = await vscode.window.showInputBox({
+            prompt: 'Project / repository name',
+            value: autoName,
+        });
+        if (!customLabel) { return; }
+        label = customLabel;
+
+        const budgetStr = await vscode.window.showInputBox({
+            prompt: `Token budget (detected ${commitCount} commits, recommended ≥ ${autoBudget.toLocaleString()})`,
+            value: String(autoBudget),
+            validateInput: v => isNaN(Number(v)) ? 'Must be a number' : null,
+        });
+        if (!budgetStr) { return; }
+        budget = Number(budgetStr);
+    }
 
     bridge = new wasm.AnalyzerBridge();
     const rootUuid = bridge.initialize_tree(label, `Repository: ${label}`, budget);
     activeNodeUuid = rootUuid;
 
-    // Seed the commit index with HEAD so future commits can trace their parent
-    const root = repoPath();
     if (root) {
         const head = await headHash(root);
         if (head) { bridge.index_commit(head, rootUuid); }
     }
 
     vscode.window.showInformationMessage(
-        `Analyzer Tree initialized. Use "Scan Git History" to import existing commits.`
+        `Analyzer Tree initialized for "${label}" (budget: ${budget.toLocaleString()} tokens). Use "Scan Git History" to import commits.`
     );
     persistAndRefresh();
     startGitWatcher();
@@ -248,13 +271,16 @@ async function cmdScanHistory(): Promise<void> {
         { location: vscode.ProgressLocation.Notification, title: 'Importing git history…', cancellable: false },
         async progress => {
             progress.report({ message: `Fetching last ${n} commits…` });
-            // Oldest first so parent links resolve correctly
             const commits = (await getRecentCommits(root, n)).reverse();
             progress.report({ message: `Inserting ${commits.length} commits into tree…` });
+            isBatchImporting = true;
             await onNewCommits(commits);
+            isBatchImporting = false;
             const aiCount = commits.filter(c => detectAgent(c as unknown as DetectorCommit)).length;
+            const total = bridge?.get_total_tokens() ?? 0;
+            const budgetVal = bridge?.get_token_budget() ?? 0;
             vscode.window.showInformationMessage(
-                `Imported ${commits.length} commits (${aiCount} from AI agents) into the context tree.`
+                `Imported ${commits.length} commits (${aiCount} from AI agents) — ${total.toLocaleString()}/${budgetVal.toLocaleString()} tokens used.`
             );
         }
     );
@@ -346,10 +372,10 @@ function refreshAll(): void {
     if (!bridge) { return; }
     provider.refresh(bridge.get_tree_structure());
     updateStatusBar();
-    if (bridge.needs_pruning()) {
+    if (!isBatchImporting && bridge.needs_pruning()) {
         vscode.window
             .showWarningMessage(
-                `Token budget exceeded (${bridge.get_total_tokens()}/${bridge.get_token_budget()}). Prune a node?`,
+                `Token budget exceeded (${bridge.get_total_tokens().toLocaleString()}/${bridge.get_token_budget().toLocaleString()}). Prune a node?`,
                 'Prune active node',
             )
             .then(c => { if (c) { vscode.commands.executeCommand('analyzer-tree.pruneNode'); } });
