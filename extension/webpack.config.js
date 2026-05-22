@@ -20,9 +20,6 @@ module.exports = {
       },
     ],
   },
-  experiments: {
-    asyncWebAssembly: true, // Native WASM support in bundle
-  },
   externals: {
     vscode: 'commonjs vscode', // Do not bundle VS Code core modules
   },

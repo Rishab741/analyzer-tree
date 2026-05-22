@@ -23,7 +23,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     extensionCtx = context;
 
     try {
-        wasm = await import('./wasm/analyzer_core');
+        wasm = require('./wasm/analyzer_core') as WasmModule;
     } catch (err) {
         vscode.window.showErrorMessage(`Analyzer Tree: failed to load Rust engine — ${err}`);
         return;
