@@ -115,9 +115,17 @@ export async function patchClaudeMd(repoRoot: string, structureJson: string): Pr
         const commits    = extractCommits(tree);
         const root       = tree.nodes.find(n => n.node.uuid === tree.root_uuid);
         const projectName = root?.node.label ?? 'Project';
-        const aiCommits  = commits.filter(c => c.meta?.agent);
+        // deduplicate by hash (newest wins — keep last occurrence)
+        const seen = new Set<string>();
+        const deduped = [...commits].reverse().filter(c => {
+            const key = c.meta?.commit_hash ?? c.uuid;
+            if (seen.has(key)) { return false; }
+            seen.add(key);
+            return true;
+        }).reverse();
+        const aiCommits  = deduped.filter(c => c.meta?.agent);
         const lastAi     = aiCommits.at(-1);
-        const recent5    = commits.slice(-5).reverse();
+        const recent5    = deduped.slice(-5).reverse();
 
         const block = [
             CLAUDE_MD_START,
@@ -148,13 +156,38 @@ export async function patchClaudeMd(repoRoot: string, structureJson: string): Pr
 
         let updated: string;
         if (existing.includes(CLAUDE_MD_START)) {
+            // Replace only the auto block; preserve everything outside the markers
             const before = existing.slice(0, existing.indexOf(CLAUDE_MD_START));
             const after  = existing.slice(existing.indexOf(CLAUDE_MD_END) + CLAUDE_MD_END.length);
             updated = before + block + after;
+        } else if (existing) {
+            // File exists with user content — append auto block at the bottom
+            updated = existing.trimEnd() + '\n\n' + block + '\n';
         } else {
-            updated = existing
-                ? existing.trimEnd() + '\n\n' + block + '\n'
-                : block + '\n';
+            // New file — create a full template with placeholder sections above the auto block
+            const template = [
+                `# ${projectName}`,
+                '',
+                '## Overview',
+                '<!-- Describe what this project does and its main purpose -->',
+                '',
+                '## Architecture',
+                '<!-- Key components, layers, and how they fit together -->',
+                '',
+                '## Setup',
+                '```sh',
+                '# Commands to install dependencies and run the project',
+                '```',
+                '',
+                '## Conventions',
+                '<!-- Coding style, branch naming, commit format, important patterns -->',
+                '',
+                '## Key Files',
+                '<!-- List the most important files/directories and what they do -->',
+                '',
+                '',
+            ].join('\n');
+            updated = template + block + '\n';
         }
 
         await vscode.workspace.fs.writeFile(claudeMdUri, Buffer.from(updated, 'utf8'));
