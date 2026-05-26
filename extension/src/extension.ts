@@ -4,6 +4,7 @@ import { ContextTreeWebviewProvider } from './contextTreeWebview';
 import { GitWatcher, getRecentCommits, headHash, parentHashes, countCommits, RawCommit } from './gitWatcher';
 import { detectAgent, RawCommit as DetectorCommit } from './agentDetector';
 import { CommitMeta, KnownAgent } from './types';
+import { generateMarkdown, writeContextMd, patchClaudeMd } from './contextExporter';
 
 type WasmModule = typeof import('./wasm/analyzer_core');
 
@@ -298,11 +299,20 @@ async function runHistoryScan(root: string, n: number): Promise<void> {
             isBatchImporting = true;
             await onNewCommits(commits);
             isBatchImporting = false;
+
+            // Write context files once after full batch (not on every commit)
+            if (bridge && root) {
+                const structJson = bridge.get_tree_structure();
+                const md = generateMarkdown(structJson);
+                await writeContextMd(root, md).catch(() => undefined);
+                await patchClaudeMd(root, structJson).catch(() => undefined);
+            }
+
             const aiCount = commits.filter(c => detectAgent(c as unknown as DetectorCommit)).length;
             const total = bridge?.get_total_tokens() ?? 0;
             const budgetVal = bridge?.get_token_budget() ?? 0;
             vscode.window.showInformationMessage(
-                `Imported ${commits.length} commits (${aiCount} AI) — ${total.toLocaleString()}/${budgetVal.toLocaleString()} tokens.`
+                `Imported ${commits.length} commits (${aiCount} AI) — ${total.toLocaleString()}/${budgetVal.toLocaleString()} tokens. Context written to .analyzer-tree/CONTEXT.md`
             );
         }
     );
@@ -366,8 +376,17 @@ function cmdShowStats(): void {
 
 function persistAndRefresh(): void {
     if (bridge) {
-        extensionCtx.workspaceState.update('analyzerTree.snapshot', bridge.export_tree());
-        writeContextFile(bridge.export_tree());   // keep .analyzer-tree/context.json fresh
+        const structureJson = bridge.get_tree_structure();
+        const exportJson    = bridge.export_tree();
+        extensionCtx.workspaceState.update('analyzerTree.snapshot', exportJson);
+        writeContextFile(exportJson);
+        // Write tiered context files and patch CLAUDE.md (non-blocking)
+        const root = repoPath();
+        if (root && !isBatchImporting) {
+            const md = generateMarkdown(structureJson);
+            writeContextMd(root, md).catch(() => undefined);
+            patchClaudeMd(root, structureJson).catch(() => undefined);
+        }
     }
     refreshAll();
 }

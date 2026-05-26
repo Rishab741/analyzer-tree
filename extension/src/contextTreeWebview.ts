@@ -45,7 +45,8 @@ export class ContextTreeWebviewProvider implements vscode.WebviewViewProvider {
     ): void {
         this._view = webviewView;
         webviewView.webview.options = { enableScripts: true };
-        webviewView.webview.html  = buildHtml();
+        const nonce = Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+        webviewView.webview.html  = buildHtml(nonce);
 
         webviewView.webview.onDidReceiveMessage(msg => {
             if (msg.type === 'saveContext') { this.onSaveContext(msg.selectedUuids ?? []); }
@@ -148,12 +149,13 @@ function flattenTree(tree: SerializableTree): FlatNode[] {
 
 // ── HTML ──────────────────────────────────────────────────────────────────────
 
-function buildHtml(): string {
+function buildHtml(nonce: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <title>Context Tree</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -284,7 +286,7 @@ body{
   <div id="sel-lbl">Context Selection<br><strong id="stok">0</strong> tok selected</div>
   <button id="save-btn" disabled>SAVE CONTEXT</button>
 </div>
-<script>
+<script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
 let allNodes = [];
 let sel = new Set();
