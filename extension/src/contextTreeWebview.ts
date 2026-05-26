@@ -45,25 +45,27 @@ export class ContextTreeWebviewProvider implements vscode.WebviewViewProvider {
     ): void {
         this._view = webviewView;
         webviewView.webview.options = { enableScripts: true };
-        const nonce = Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
-        webviewView.webview.html  = buildHtml(nonce);
+        webviewView.webview.html = buildHtml();
 
         webviewView.webview.onDidReceiveMessage(msg => {
-            if (msg.type === 'saveContext') { this.onSaveContext(msg.selectedUuids ?? []); }
-            if (msg.type === 'selectNode')  { this.onSelectNode(msg.uuid); }
+            switch (msg.type) {
+                case 'ready':
+                    // Webview script is loaded and listening — safe to send data now
+                    if (this._pending) {
+                        webviewView.webview.postMessage(this._pending);
+                    }
+                    break;
+                case 'saveContext': this.onSaveContext(msg.selectedUuids ?? []); break;
+                case 'selectNode':  this.onSelectNode(msg.uuid); break;
+            }
         });
 
-        // Re-send latest state whenever the view becomes visible (e.g. user opens sidebar)
+        // Re-send whenever the panel becomes visible again (user switches back to sidebar)
         webviewView.onDidChangeVisibility(() => {
             if (webviewView.visible && this._pending) {
                 webviewView.webview.postMessage(this._pending);
             }
         });
-
-        // Send any state that arrived before the view was resolved
-        if (this._pending) {
-            webviewView.webview.postMessage(this._pending);
-        }
     }
 
     refresh(structureJson: string): void {
@@ -149,13 +151,13 @@ function flattenTree(tree: SerializableTree): FlatNode[] {
 
 // ── HTML ──────────────────────────────────────────────────────────────────────
 
-function buildHtml(nonce: string): string {
+function buildHtml(): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
 <title>Context Tree</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -286,7 +288,7 @@ body{
   <div id="sel-lbl">Context Selection<br><strong id="stok">0</strong> tok selected</div>
   <button id="save-btn" disabled>SAVE CONTEXT</button>
 </div>
-<script nonce="${nonce}">
+<script>
 const vscode = acquireVsCodeApi();
 let allNodes = [];
 let sel = new Set();
@@ -393,6 +395,9 @@ window.addEventListener('message', function(e){
   document.getElementById('tok-info').textContent = fmt(m.totalTokens||0)+'/'+fmt(m.budget||0);
   render(allNodes);
 });
+
+// Signal to the extension that this script is loaded and ready to receive data
+vscode.postMessage({type:'ready'});
 </script>
 </body>
 </html>`;
